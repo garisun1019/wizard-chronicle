@@ -205,12 +205,35 @@ const App = () => {
   };
 
   const handleMouseDown = (e) => {
-    // 1. 如果是鼠标中键，或者按住 Shift 点击，这是为了拖拽画布，不生成角色
-    if (e.button === 1 || (e.button === 0 && e.shiftKey)) {
-      setIsPanning(true);
-      setPanStart({ x: e.clientX, y: e.clientY });
-      return;
+ // === 新增：检测是否为触摸事件 ===
+ const isTouch = e.touches && e.touches.length > 0;
+
+ // 1. 开启画布拖拽 (Panning) 的条件：
+ //    A. 鼠标中键 (button === 1)
+ //    B. 鼠标左键 + Shift (button === 0 && shiftKey)
+ //    C. [新增] 手机触摸 (isTouch) 且不是多指操作
+ if (e.button === 1 || (e.button === 0 && e.shiftKey) || isTouch) {
+   setIsPanning(true);
+   // 使用我们之前写的 getEventPos 获取正确坐标
+   const { x, y } = getEventPos(e);
+   setPanStart({ x, y });
+   return;
     }
+// 2. 点击背景的其他逻辑 (比如创建新节点/取消选中)
+if (e.target === containerRef.current) {
+  if (mode.startsWith('add-')) {
+     const rect = containerRef.current.getBoundingClientRect();
+     // 注意：这里也要用 getEventPos 确保兼容
+     const { x: clientX, y: clientY } = getEventPos(e); 
+     const x = (clientX - rect.left - transform.x) / transform.scale;
+     const y = (clientY - rect.top - transform.y) / transform.scale;
+     createNode(mode === 'add-character' ? 'character' : 'event', x, y);
+     setMode('view'); 
+      } else {
+        setSelectedId(null);
+        setEditingNode(null);
+      }
+}
    // 2. 这里的修改是关键！
     // 我们删掉了 "if (e.target === containerRef.current)" 这个过于严格的检查。
     // 因为由于卡片组件里已经写了 e.stopPropagation() (阻止冒泡)，
@@ -413,6 +436,7 @@ const App = () => {
 
   return (
     <div className="w-full h-screen bg-[#e3d7bf] overflow-hidden font-serif text-[#2e2010] relative"
+    onTouchStart={handleMouseDown}
     onTouchMove={handleGlobalMouseMove}  onTouchEnd={handleGlobalMouseUp}
     onMouseMove={handleGlobalMouseMove} onMouseUp={handleGlobalMouseUp}
     onContextMenu={(e) => e.preventDefault()}
