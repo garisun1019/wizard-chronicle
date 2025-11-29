@@ -49,9 +49,20 @@ const App = () => {
   // ---------------------------------------------------------------------------
   // 状态管理
   // ---------------------------------------------------------------------------
+
+  // === 新增：坐标提取助手 ===
+  // 它可以兼容鼠标(e.clientX)和触摸(e.touches[0].clientX)
+  const getEventPos = (e) => {
+    if (e.touches && e.touches.length > 0) {
+      return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    }
+    // 如果是鼠标事件，直接返回
+    return { x: e.clientX, y: e.clientY };
+  };
+  
   const [nodes, setNodes] = useState([]);
   const [edges, setEdges] = useState([]);
-  
+
   // 视图状态
   const [transform, setTransform] = useState({ x: 0, y: 0, scale: 1 });
   const [isPanning, setIsPanning] = useState(false);
@@ -250,6 +261,26 @@ const App = () => {
   const handleNodeMouseDown = (e, id) => {
     e.stopPropagation();
    // if (mode.startsWith('add-')) return; 
+   // === 修改 A：兼容触摸检测 ===
+    // 如果是触摸事件(e.touches存在)，就没有 button 的概念，直接认为是左键
+    const isTouch = e.touches && e.touches.length > 0;
+    
+    if (mode.startsWith('add-')) return; 
+
+    // === 修改 B：判定逻辑 ===
+    // 如果不是触摸，且是右键/Alt键，则是连线
+    if (!isTouch && (e.altKey || e.button === 2 || mode === 'link')) { 
+       e.preventDefault();
+       setLinkingState({ sourceId: id, mouseX: e.clientX, mouseY: e.clientY });
+       return;
+    }
+    // 注意：移动端暂时先只支持“点击连线按钮”模式连线，不支持长按连线（太复杂先不做）
+    if (mode === 'link') {
+       const { x, y } = getEventPos(e); // 翻译坐标
+       setLinkingState({ sourceId: id, mouseX: x, mouseY: y });
+       return;
+    }
+    
 
     // 如果是“加人”或“加事件”模式，不准点卡片
     if (mode === 'add-character' || mode === 'add-event') return;
@@ -264,11 +295,13 @@ const App = () => {
     const node = nodes.find(n => n.id === id);
     setSelectedId(id);
     setEditingNode(node);
-    
+    // === 修改 C：使用翻译官获取坐标 ===
+    const { x, y } = getEventPos(e);
+
     setDragState({
       id,
-      startX: e.clientX,
-      startY: e.clientY,
+      startX: x,// 使用翻译后的 x
+      startY: y,// 使用翻译后的 y
       initialX: node.x,
       initialY: node.y
     });
@@ -286,19 +319,23 @@ const App = () => {
   };
 
   const handleGlobalMouseMove = useCallback((e) => {
+    // === 新增：如果是触摸移动，获取坐标 ===
+    const { x, y } = getEventPos(e);
+
     if (isPanning && panStart) {
-      const dx = e.clientX - panStart.x;
-      const dy = e.clientY - panStart.y;
+      //计算差值
+      const dx =x - panStart.x;
+      const dy = y - panStart.y;
       setTransform(prev => ({ ...prev, x: prev.x + dx, y: prev.y + dy }));
-      setPanStart({ x: e.clientX, y: e.clientY });
+      setPanStart({ x: x, y: y });// 更新起点
     }
     if (dragState) {
-      const dx = (e.clientX - dragState.startX) / transform.scale;
-      const dy = (e.clientY - dragState.startY) / transform.scale;
+      const dx = (x - dragState.startX) / transform.scale;
+      const dy = (y - dragState.startY) / transform.scale;
       setNodes(prev => prev.map(n => n.id === dragState.id ? { ...n, x: dragState.initialX + dx, y: dragState.initialY + dy } : n));
     }
     if (linkingState) {
-      setLinkingState(prev => ({ ...prev, mouseX: e.clientX, mouseY: e.clientY }));
+      setLinkingState(prev => ({ ...prev, mouseX:x, mouseY: y}));
     }
   }, [isPanning, panStart, dragState, linkingState, transform.scale]);
 
@@ -376,8 +413,12 @@ const App = () => {
 
   return (
     <div className="w-full h-screen bg-[#e3d7bf] overflow-hidden font-serif text-[#2e2010] relative"
-         onMouseMove={handleGlobalMouseMove} onMouseUp={handleGlobalMouseUp}
-         onContextMenu={(e) => e.preventDefault()}>
+    onTouchMove={handleGlobalMouseMove}  onTouchEnd={handleGlobalMouseUp}
+    onMouseMove={handleGlobalMouseMove} onMouseUp={handleGlobalMouseUp}
+    onContextMenu={(e) => e.preventDefault()}
+    // === 新增：关键样式，禁止浏览器默认滚动 ===
+    style={{ touchAction: 'none' }}
+    >
       
       {/* 背景 */}
       <div className="absolute inset-0 pointer-events-none z-0" 
@@ -490,9 +531,15 @@ const App = () => {
 
           {nodes.map(node => (
             <NodeCard 
-              key={node.id} node={node} selected={selectedId === node.id}
-              onMouseDown={(e) => handleNodeMouseDown(e, node.id)}
-              onMouseUp={(e) => handleNodeMouseUp(e, node.id)}
+            key={node.id} node={node} selected={selectedId === node.id}
+            // === 新增：绑定触摸开始事件 ===
+            onTouchStart={(e) => handleNodeMouseDown(e, node.id)}
+                          
+            onMouseDown={(e) => handleNodeMouseDown(e, node.id)}
+            onMouseUp={(e) => handleNodeMouseUp(e, node.id)}
+            // 触摸结束其实不需要专门绑，因为冒泡到最外层会被 handleGlobalMouseUp 捕获
+            // 但为了保险，可以加上 onTouchEnd
+            onTouchEnd={(e) => handleNodeMouseUp(e, node.id)} 
             />
           ))}
         </div>
@@ -690,6 +737,11 @@ const App = () => {
 // 组件：卡片渲染
 // -----------------------------------------------------------------------------
 const NodeCard = ({ node, selected, onMouseDown, onMouseUp }) => {
+  // === 新增：安全护盾 ===
+  // 如果 node 不存在，或者 node.data 丢了，直接返回 null（不渲染），防止报错白屏
+  if (!node || !node.data) {
+    return null;
+  }
   const { name, title, date, colorIdx, icon, tags } = node.data;
   const theme = MAGIC_COLORS[colorIdx || 0];
   const Icon = MAGIC_ICONS[icon || 'wand'].component;
